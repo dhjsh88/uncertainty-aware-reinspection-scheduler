@@ -1,6 +1,12 @@
 # Deadline- and Uncertainty-Aware RTL Scheduler for Selective Reinspection
 
-An AI-based machine-vision inspection line may flag some parts as defective even when the initial classification is uncertain. Each borderline case becomes a reinspection request with a deadline and an uncertainty score. Requests wait in one of four per-stream FIFOs, all sharing a single reinspection engine. This synthesizable Verilog scheduler selects which request to dispatch next, with the goal of recovering as many false rejects as possible before their deadlines.
+An AI-based machine-vision inspection line may flag some parts as defective
+even when the initial classification is uncertain. Each borderline case
+becomes a **reinspection request** with a deadline and an uncertainty score.
+Requests wait in one of four per-stream FIFOs, all sharing a single
+reinspection engine. This synthesizable Verilog scheduler selects which
+request to dispatch next, with the goal of recovering as many false rejects
+as possible before their deadlines.
 
 ## Results
 
