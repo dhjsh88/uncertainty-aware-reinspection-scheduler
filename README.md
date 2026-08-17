@@ -1,4 +1,4 @@
-# Deadline- and Uncertainty-Aware RTL Scheduler for Selective Reinspection
+# Deadline and Uncertainty Aware RTL Scheduler for Selective Reinspection
 
 A synthesizable hardware scheduler (Verilog, Zybo Z7-10; synthesis timing
 closed at 40 MHz) that arbitrates
