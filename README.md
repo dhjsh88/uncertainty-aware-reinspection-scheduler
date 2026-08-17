@@ -35,9 +35,9 @@ HYB `W_D:W_U` = 3:1.
 | overload | UNC | 195 | 105 | **27** | **17** |
 | overload | HYB | 195 | 105 | 32 | 16 |
 
-Policy choice has little effect under normal load. Under overload, the uncertainty-aware policies produce fewer deadline misses and recover more false rejects than EDF.
-
-<sub>FR recovered is calculated offline from labels in the trace CSV; the labels are not visible to the RTL.</sub>
+Policy choice has little effect under normal load. Under overload, the
+uncertainty-aware policies produce fewer deadline misses and recover more
+false rejects than EDF.
 
 ## Analysis
 
@@ -178,8 +178,9 @@ application's requirement.
 ### Golden-model comparison
 
 All 12 configurations (3 workloads x 4 policies) pass against a
-cycle-stepped Python golden model in Vivado 2022.2 xsim. The following
-conservation invariant holds in every run:
+cycle-stepped Python golden model in Vivado 2022.2 xsim. A multi-seed
+regression (6 seeds x 3 loads x 4 policies, 72 runs) also matches in every
+run. The following conservation invariant holds in every run:
 `pushed == dispatched + expired`.
 
 ### Pass criterion
@@ -198,6 +199,13 @@ The golden model reproduces the relevant RTL register stages:
 
 Although a three-cycle tolerance is allowed, all 12 runs matched cycle for
 cycle with a difference of 0.
+
+### Metrics
+
+All counters in the results table are RTL outputs except `FR recovered`,
+which is computed offline by the golden model from labels in the trace CSV.
+The labels are not visible to the RTL, so this counter is not part of the
+RTL-vs-golden comparison.
 
 ### Assertions
 
