@@ -229,20 +229,6 @@ The following corner cases were also tested:
 * expiration of entries hidden behind a valid head, confirming the intended
   head-only expiration behavior
 
-## Status / roadmap
-
-Done:
-
-- [x] Golden-model and RTL match across 12 configurations
-- [x] Multi-seed regression: 6 seeds x 3 loads x 4 policies (72 runs)
-  * all runs and corner cases match the golden model
-  * xsim runs additionally monitored by SVA A1-A5
-- [x] Synthesis and timing closure at 40 MHz
-
-Future work:
-
-- [ ] Correlated-workload experiment that distinguishes Hybrid weight settings
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
