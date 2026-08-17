@@ -87,16 +87,6 @@ Hybrid should be reevaluated with a feasibility gate and workloads in which
 uncertainty and deadline pressure are correlated. This is left as future
 work.
 
-## Scope
-
-* **Simulation-verified**: `scheduler_top` and all instantiated submodules.
-  See [Verification methodology](#verification-methodology).
-* **Synthesis-only**: the timing and utilization figures below are Vivado
-  synthesis estimates for xc7z010clg400-1. Place-and-route and on-board
-  validation were not performed.
-* **Not verified**: `axil_regs.v` is an optional AXI4-Lite CSR wrapper for
-  board bring-up. It is outside the verified simulation top.
-
 ## Architecture
 
 ![Block diagram](docs/architecture.png)
@@ -162,11 +152,11 @@ contains 43 logic levels:
 FIFO head -> expire / policy / tournament -> grant -> pop pointer
 ```
 
-This path updates architectural state and
-cannot be removed by registering only the measurement signals. Reaching
-100 MHz would require pipelining the grant decision. This would make each
-decision use one-cycle-old state and would therefore change the scheduling
-semantics. Pipelining the grant decision is left as future work.
+Unlike the counter path, this one cannot be registered away: delaying the
+grant delays the FIFO pop, so the next decision would be made on stale
+state. Reaching 100 MHz would therefore require pipelining the grant
+decision itself, which changes the scheduling semantics and is left as
+future work.
 
 **Application context.** The engine occupies 200 cycles per request. A
 scheduler capable of making one decision per cycle at 40 MHz therefore
@@ -222,14 +212,9 @@ simulation.
 
 ### Corner cases
 
-The following corner cases were also tested:
-
-* empty trace
-* all requests expired on arrival
-* simultaneous arrival on all four streams; the rotating tie-break order was
-  observed as 0, 1, 2, 3
-* expiration of entries hidden behind a valid head, confirming the intended
-  head-only expiration behavior
+Corner cases tested: empty trace, all requests expired on arrival,
+simultaneous arrival on all four streams (tie-break observed as 0, 1, 2, 3),
+and expiration of entries hidden behind a valid head.
 
 ## License
 
