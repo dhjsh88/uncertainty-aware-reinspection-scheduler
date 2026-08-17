@@ -1,21 +1,20 @@
 # Deadline- and Uncertainty-Aware RTL Scheduler for Selective Reinspection
 
-A synthesizable hardware scheduler (Verilog, Zybo Z7-10) that arbitrates
-AI-vision **reinspection requests** across 4 input streams. Each request carries a
-32-bit deadline and an 8-bit uncertainty score; the scheduler decides *which
-borderline part gets a second inspection pass first* when the reinspection engine
-is the bottleneck.
-
-The problem comes from inspection lines I worked on as a manufacturing
-engineer: borderline parts (potential false rejects) compete for limited
-reinspection capacity under takt-time deadlines.
+An AI-based machine-vision inspection line may flag some parts as defective even when the initial classification is uncertain. Each borderline case becomes a reinspection request with a deadline and an uncertainty score. Requests wait in one of four per-stream FIFOs, all sharing a single reinspection engine. This synthesizable Verilog scheduler selects which request to dispatch next, with the goal of recovering as many false rejects as possible before their deadlines.
 
 ## Results
 
-Policy comparison — seed 7, 300 requests, LATENCY = 200 cycles,
-HYB W_D:W_U = 3:1:
+The scheduler implements four policies:
 
-| Load | Policy | Dispatched | Expired | Deadline miss | FR recovered |
+* **FIFO** selects the oldest request
+* **EDF** selects the request with the earliest deadline
+* **UNC** selects the request with the highest uncertainty
+* **HYB** combines deadline urgency and uncertainty using programmable weights
+
+Test conditions: seed 7, 300 requests, `LATENCY` = 200 cycles, and
+HYB `W_D:W_U` = 3:1.
+
+| Load | Policy | Dispatched | Expired | Deadline misses | FR recovered |
 |---|---|---|---|---|---|
 | normal | FIFO | 295 | 5 | 8 | 22 |
 | normal | EDF | 296 | 4 | **3** | 23 |
@@ -30,68 +29,84 @@ HYB W_D:W_U = 3:1:
 | overload | UNC | 195 | 105 | **27** | **17** |
 | overload | HYB | 195 | 105 | 32 | 16 |
 
-`FR recovered` is computed offline from labels in the trace CSV (not visible
-to the RTL). All 12 configurations match a Python golden model — see
-[Verification methodology](#verification-methodology).
+The `FR recovered` metric is calculated offline from labels in the trace CSV.
+These labels are not visible to the RTL.
 
-Under light load the policy barely matters; under overload,
-uncertainty-aware selection both misses fewer deadlines *and* recovers more
-false rejects than deadline-only EDF.
+All 12 configurations match the Python golden model. See
+[Verification methodology](#verification-methodology) for details.
+
+Policy choice has little effect under normal load. Under overload, the
+uncertainty-aware policies produce fewer deadline misses and recover more
+false rejects than EDF.
 
 ## Analysis
 
-**Why EDF misses the most deadlines under overload.** This is not a defect of
-EDF itself but of a selection rule that ignores the known, fixed processing
-time: with `remaining slack < LATENCY` a request is already infeasible, yet
-minimum-slack selection prefers exactly those requests, wasting engine
-capacity (58 dispatches x 200 cycles). The system assumes a fixed second-pass
-latency, so infeasibility is decidable with a single comparator.
+### EDF under overload
 
-**Feasibility-gate experiment (golden model only).** Dropping requests with
-`slack < LATENCY` at the queue head drives deadline misses to **0 for every
-policy** and lifts EDF's useful throughput from 138 to 195 under overload —
-but it also collapses the differences between policies. The gate is standard
-admission control, so it is kept as an analysis finding rather than a design
-contribution; the policy comparison above is deliberately run *without* the
-gate, where the "which request first" question is non-trivial. (Reproduce
-with `golden.py --gate`.)
+EDF does not account for the known, fixed processing latency. A request
+cannot finish before its deadline when `remaining slack < LATENCY`. However,
+EDF still favors such requests because they have the smallest remaining
+slack. Under overload, 58 of the requests EDF dispatches miss their deadlines,
+while each still occupies the engine for 200 cycles.
 
-**Why Hybrid never wins at any weight.** A weight sweep (W_D:W_U from 8:1 to
-1:8, `sw/sweep_weights.sh`) shows Hybrid converging to UNC as W_U grows and
-never beating it:
+Because the second-pass latency is fixed, a single comparator can identify
+these infeasible requests.
 
-1. Without feasibility filtering, deadline urgency under overload prioritizes
-   already-infeasible requests, so any W_D > 0 hurts (8:1 raises overload
-   miss to 43; the optimal weight degenerates to W_D = 0).
-2. Hybrid quantizes deadline slack to an 8-bit urgency, losing EDF's
-   full-resolution deadline ordering precisely where slack is large
-   (normal load: EDF miss 3 vs Hybrid 7 even at 8:1).
-3. In the synthetic workload, false-reject probability is tied to uncertainty
-   only and is independent of deadlines, so deadline information carries no
-   additional predictive value for FR recovery.
+### Feasibility gate
 
-Hybrid becomes meaningful only with a feasibility gate and with workloads
-where uncertainty and deadline pressure are correlated — left as future work.
+A feasibility-gate experiment was performed in the golden model only. A
+request is dropped at the queue head when `slack < LATENCY`. This reduces
+deadline misses to 0 for every policy and raises EDF's on-time completions
+(dispatched minus missed) from 138 to 195 under overload. However, it also removes most of the
+performance differences between the policies.
+
+The gate is a standard admission-control mechanism, so it is reported as an
+analysis result rather than a design contribution. The main policy comparison
+excludes the gate to preserve a meaningful scheduling problem.
+
+The experiment can be reproduced with `golden.py --gate`.
+
+### Hybrid weight sweep
+
+A weight sweep from W_D:W_U = 8:1 to 1:8 was performed using
+`sw/sweep_weights.sh`. As W_U increases, Hybrid converges toward UNC but does
+not outperform it.
+
+1. Without feasibility filtering, deadline urgency prioritizes requests that
+   can no longer finish on time. Any nonzero W_D therefore degrades overload
+   performance. At 8:1, deadline misses increase to 43. The best result
+   occurs at W_D = 0, which makes Hybrid equivalent to UNC.
+2. Hybrid quantizes deadline slack into an 8-bit urgency value. This loses
+   EDF's full-resolution deadline ordering when slack is large. Under normal
+   load, EDF produces 3 deadline misses, while Hybrid produces 7 even at 8:1.
+3. In the synthetic workload, false-reject probability depends only on
+   uncertainty and is independent of the deadline. Deadline information
+   therefore provides no additional predictive value for FR recovery.
+
+Hybrid should be reevaluated with a feasibility gate and workloads in which
+uncertainty and deadline pressure are correlated. This is left as future
+work.
 
 ## Scope
 
-* **Simulation-verified**: scheduler_top and everything under it — see
-  [Verification methodology](#verification-methodology).
-* **Synthesis-only**: timing and utilization figures below are Vivado
-  synthesis estimates on xc7z010clg400-1; no place-and-route or board run.
-* **Not verified**: axil_regs.v (AXI4-Lite CSR wrapper) is provided for
-  optional board bring-up and is outside the verified simulation top.
+* **Simulation-verified**: `scheduler_top` and all instantiated submodules.
+  See [Verification methodology](#verification-methodology).
+* **Synthesis-only**: the timing and utilization figures below are Vivado
+  synthesis estimates for xc7z010clg400-1. Place-and-route and on-board
+  validation were not performed.
+* **Not verified**: `axil_regs.v` is an optional AXI4-Lite CSR wrapper for
+  board bring-up. It is outside the verified simulation top.
 
 ## Architecture
 
 ![Block diagram](docs/architecture.png)
 
-* Record: 80 bits = `{req_id[8], uncertainty[8], deadline[32], arrival[32]}`
-* Policies (2-bit mode): `00` FIFO · `01` EDF · `10` UNC · `11` HYB
-  (`score = W_D*urgency8 + W_U*u`, runtime-programmable weights)
-* Head-only expiration, non-preemptive engine, per-stream FWFT FIFOs
-* `axil_regs.v` (AXI4-Lite CSR) is included for optional board bring-up but is
-  not part of the verified simulation top
+* Record format: 80 bits, `{req_id[8], uncertainty[8], deadline[32], arrival[32]}`
+* Policy modes: `00` FIFO, `01` EDF, `10` UNC, `11` HYB
+* Hybrid score: `score = W_D*urgency8 + W_U*u`, weights programmable at runtime
+* Expiration is checked only at each FIFO head
+* The reinspection engine is non-preemptive
+* Each input stream uses an FWFT FIFO
 
 ## Repository layout
 
@@ -103,62 +118,125 @@ constraints/  timing.xdc (25 ns clock)
 docs/         architecture.png
 ```
 
-Traces and simulation outputs are generated deterministically by the scripts
-in `sw/` and are not committed.
+Trace files and simulation outputs are generated deterministically by the
+scripts in `sw/` and are not committed.
 
-## Synthesis results (xc7z010clg400-1, Vivado 2022.2)
+## Synthesis results
 
-* **Utilization**: 2,532 LUTs (14.4%), 753 FFs (2.1%), **0 BRAM, 0 DSP** — the
-  hybrid's 8-bit multiplies map to plain LUT logic, and the per-stream FIFOs
-  infer distributed RAM. (Figures from the pre-pipeline synthesis; the counter
-  pipeline below adds about a hundred snapshot registers.)
-* **Timing closure at 40 MHz** (25 ns period, WNS +0.694 ns with synthesis
-  strategy Flow_PerfOptimized_high; ~41.1 MHz implied Fmax at synthesis
-  estimates. Default strategy closes at 37 MHz / 27 ns, WNS +1.137 ns). The 100 MHz initial target was not met, and the
-  gap decomposes into two findings:
-  1. The first critical path (WNS −18.1 ns, 58 logic levels) ended at the
-     64-bit `sum_latency` statistics accumulator — measurement logic riding
-     combinationally on the decision chain. Snapshotting the grant-time
-     operands and accumulating one cycle later removed it **without changing
-     any counter value or the dispatch log** (re-verified: 12/12
-     configurations still match the golden model exactly).
-  2. The remaining path (25.7 ns, 43 levels) is the single-cycle decision loop
-     itself: FIFO head → expire/policy/tournament → grant → pop pointer. It
-     updates architectural state, so it cannot be deferred by snapshotting;
-     closing 100 MHz would require pipelining the grant decision, which
-     changes scheduling semantics (decisions made on one-cycle-old state) and
-     is left as future work.
-* **Context**: the engine occupies 200 cycles per request, so one scheduling
-  decision per cycle at 40 MHz exceeds the application's actual decision-rate
-  requirement by two orders of magnitude.
+Target: xc7z010clg400-1, Vivado 2022.2.
+
+### Utilization
+
+* 2,532 LUTs (14.4%)
+* 753 flip-flops (2.1%)
+* 0 BRAM, 0 DSP
+
+The 8-bit Hybrid multipliers map to LUT logic, and the per-stream FIFOs are
+inferred as distributed RAM. These figures are from the synthesis performed
+before the performance-counter pipeline was added; the pipeline adds
+approximately 100 snapshot registers.
+
+### Timing
+
+Timing closes at 40 MHz with a 25 ns clock period. Using the
+`Flow_PerfOptimized_high` synthesis strategy, WNS is +0.694 ns. The synthesis
+estimate implies an Fmax of approximately 41.1 MHz. With the default
+synthesis strategy, timing closes at 37 MHz with a 27 ns period and WNS of
++1.137 ns.
+
+The initial 100 MHz target was not met. Timing analysis identified two
+critical paths.
+
+**Performance-counter path.** The first critical path had WNS of -18.1 ns
+and 58 logic levels. It ended at the 64-bit `sum_latency` accumulator because
+the measurement logic was part of the combinational decision path.
+Registering the grant-time operands and delaying the accumulation by one
+cycle removed this bottleneck. This change did not affect any counter value
+or the dispatch log. All 12 configurations were reverified and still match
+the golden model exactly.
+
+**Scheduling-decision path.** The remaining path is 25.7 ns long and
+contains 43 logic levels:
+
+```
+FIFO head -> expire / policy / tournament -> grant -> pop pointer
+```
+
+This path updates architectural state and
+cannot be removed by registering only the measurement signals. Reaching
+100 MHz would require pipelining the grant decision. This would make each
+decision use one-cycle-old state and would therefore change the scheduling
+semantics. Pipelining the grant decision is left as future work.
+
+**Application context.** The engine occupies 200 cycles per request. A
+scheduler capable of making one decision per cycle at 40 MHz therefore
+supports a decision rate more than two orders of magnitude above the
+application's requirement.
 
 ## Verification methodology
 
-* **12 configurations (3 workloads x 4 policies) PASS** against a
-  cycle-stepped Python golden model, on Vivado 2022.2 xsim and Icarus Verilog.
-  The conservation invariant `pushed == dispatched + expired` holds in every
-  run.
-* **Transaction-level, not cycle-accurate, as the pass criterion**: PASS is
-  defined on dispatch *order* + checked counters (cycle tolerance 3), so the
-  reference survives RTL pipeline changes. The golden model mirrors RTL
-  register stages (push visibility +2, post-pop head +1, engine occupancy
-  LATENCY+1), so in practice all 12 runs also matched cycle-for-cycle
-  (diff 0).
-* SVA A1–A5 bound to `scheduler_top`: grant is one-hot (A1), a granted head
-  is valid (A2), no grant while the engine is busy (A3), no grant of an
-  expired head (A4), expire and grant never hit the same head in one cycle
-  (A5). A6 (conservation) is checked at end of sim in the TB.
-* Corner cases: empty trace, all-expired-on-arrival, 4-stream simultaneous
-  arrival (rotating tie-break observed as 0→1→2→3), expiration of entries
-  hidden behind a live head (head-only semantics).
+### Golden-model comparison
+
+All 12 configurations (3 workloads x 4 policies) pass against a
+cycle-stepped Python golden model in Vivado 2022.2 xsim. The following
+conservation invariant holds in every run:
+`pushed == dispatched + expired`.
+
+### Pass criterion
+
+PASS requires matching dispatch order and checked counter values. Dispatch
+timestamps are compared with a three-cycle tolerance; larger differences are
+reported as warnings and do not affect PASS. This keeps the reference model
+usable after limited RTL pipeline changes.
+
+The golden model reproduces the relevant RTL register stages:
+
+* push visibility: +2 cycles
+* post-pop head visibility: +1 cycle
+* minimum grant-to-grant interval: LATENCY+1 cycles (busy is asserted for
+  LATENCY cycles)
+
+Although a three-cycle tolerance is allowed, all 12 runs matched cycle for
+cycle with a difference of 0.
+
+### Assertions
+
+SVA assertions A1-A5 are bound to `scheduler_top`:
+
+* A1: any nonzero grant is one-hot
+* A2: a granted FIFO head is valid
+* A3: no grant occurs while the engine is busy
+* A4: an expired head is never granted
+* A5: expire and grant never target the same head in one cycle
+
+The testbench checks A6, the conservation property, at the end of the
+simulation.
+
+### Corner cases
+
+The following corner cases were also tested:
+
+* empty trace
+* all requests expired on arrival
+* simultaneous arrival on all four streams; the rotating tie-break order was
+  observed as 0, 1, 2, 3
+* expiration of entries hidden behind a valid head, confirming the intended
+  head-only expiration behavior
 
 ## Status / roadmap
 
-- [x] 12-configuration golden-vs-RTL match (this repo)
-- [x] Multi-seed regression: 6 seeds x 3 loads x 4 policies (72 runs) + corner cases, all matching; xsim runs additionally monitored by SVA A1-A5
-- [x] Synthesis & timing closure (40 MHz; see Synthesis results)
-- [ ] Correlated-workload experiment where Hybrid's weights matter
+Done:
+
+- [x] Golden-model and RTL match across 12 configurations
+- [x] Multi-seed regression: 6 seeds x 3 loads x 4 policies (72 runs)
+  * all runs and corner cases match the golden model
+  * xsim runs additionally monitored by SVA A1-A5
+- [x] Synthesis and timing closure at 40 MHz
+
+Future work:
+
+- [ ] Correlated-workload experiment that distinguishes Hybrid weight settings
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
