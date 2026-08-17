@@ -1,28 +1,19 @@
-# Deadline and Uncertainty Aware RTL Scheduler for Selective Reinspection
+# Deadline- and Uncertainty-Aware RTL Scheduler for Selective Reinspection
 
-A synthesizable hardware scheduler (Verilog, Zybo Z7-10; synthesis timing
-closed at 40 MHz) that arbitrates
+A synthesizable hardware scheduler (Verilog, Zybo Z7-10) that arbitrates
 AI-vision **reinspection requests** across 4 input streams. Each request carries a
 32-bit deadline and an 8-bit uncertainty score; the scheduler decides *which
 borderline part gets a second inspection pass first* when the reinspection engine
 is the bottleneck.
 
-Motivated by production experience with machine-vision inspection lines, where
-borderline classifications (potential false rejects) compete for limited
-reinspection capacity under hard takt-time deadlines.
+The problem comes from inspection lines I worked on as a manufacturing
+engineer: borderline parts (potential false rejects) compete for limited
+reinspection capacity under takt-time deadlines.
 
 ## Results
 
-**Functional correctness** — **3 workloads x 4 policies = 12 configurations**
-PASS against a cycle-stepped Python golden model on Vivado 2022.2 xsim and
-Icarus Verilog. The PASS criterion is exact transaction order plus equality of
-all checked counters; beyond the criterion, dispatch cycles also matched
-exactly (cycle diff 0) in all 12 runs. A conservation invariant
-(`pushed == dispatched + expired`) holds in every run.
-
-**Policy comparison.** Conditions: seed 7, 300 requests, LATENCY = 200
-cycles, HYB W_D:W_U = 3:1, xsim 2022.2, compare tolerance 3 (achieved: cycle
-diff 0).
+Policy comparison — seed 7, 300 requests, LATENCY = 200 cycles,
+HYB W_D:W_U = 3:1:
 
 | Load | Policy | Dispatched | Expired | Deadline miss | FR recovered |
 |---|---|---|---|---|---|
@@ -39,11 +30,11 @@ diff 0).
 | overload | UNC | 195 | 105 | **27** | **17** |
 | overload | HYB | 195 | 105 | 32 | 16 |
 
-`FR recovered` is an offline metric computed from synthetic ground-truth
-labels in the trace CSV; the labels are not part of the 80-bit record and are
-never visible to the RTL.
+`FR recovered` is computed offline from labels in the trace CSV (not visible
+to the RTL). All 12 configurations match a Python golden model — see
+[Verification methodology](#verification-methodology).
 
-Headline: under light load the policy barely matters; under overload,
+Under light load the policy barely matters; under overload,
 uncertainty-aware selection both misses fewer deadlines *and* recovers more
 false rejects than deadline-only EDF.
 
@@ -79,15 +70,13 @@ never beating it:
    only and is independent of deadlines, so deadline information carries no
    additional predictive value for FR recovery.
 
-Hybrid becomes meaningful only with (a) a feasibility gate and (b) workloads
+Hybrid becomes meaningful only with a feasibility gate and with workloads
 where uncertainty and deadline pressure are correlated — left as future work.
 
 ## Scope
 
-* **Simulation-verified**: scheduler_top and everything under it — 12
-  configurations (3 loads x 4 policies) PASS against the golden model
-  (criterion: transaction order + checked counters; observed cycle diff 0),
-  with SVA A1-A5 active under xsim and the A6 conservation check in the TB.
+* **Simulation-verified**: scheduler_top and everything under it — see
+  [Verification methodology](#verification-methodology).
 * **Synthesis-only**: timing and utilization figures below are Vivado
   synthesis estimates on xc7z010clg400-1; no place-and-route or board run.
 * **Not verified**: axil_regs.v (AXI4-Lite CSR wrapper) is provided for
@@ -122,7 +111,7 @@ in `sw/` and are not committed.
 * **Utilization**: 2,532 LUTs (14.4%), 753 FFs (2.1%), **0 BRAM, 0 DSP** — the
   hybrid's 8-bit multiplies map to plain LUT logic, and the per-stream FIFOs
   infer distributed RAM. (Figures from the pre-pipeline synthesis; the counter
-  pipeline below adds 101 snapshot flip-flops.)
+  pipeline below adds about a hundred snapshot registers.)
 * **Timing closure at 40 MHz** (25 ns period, WNS +0.694 ns with synthesis
   strategy Flow_PerfOptimized_high; ~41.1 MHz implied Fmax at synthesis
   estimates. Default strategy closes at 37 MHz / 27 ns, WNS +1.137 ns). The 100 MHz initial target was not met, and the
@@ -145,11 +134,16 @@ in `sw/` and are not committed.
 
 ## Verification methodology
 
-* **Transaction-level, not cycle-accurate, as the pass criterion**: the golden
-  model mirrors RTL register stages (push visibility +2, post-pop head +1,
-  engine occupancy LATENCY+1), so cycles currently match exactly — but PASS is
-  defined on dispatch *order* + counters so the reference survives RTL
-  pipeline changes.
+* **12 configurations (3 workloads x 4 policies) PASS** against a
+  cycle-stepped Python golden model, on Vivado 2022.2 xsim and Icarus Verilog.
+  The conservation invariant `pushed == dispatched + expired` holds in every
+  run.
+* **Transaction-level, not cycle-accurate, as the pass criterion**: PASS is
+  defined on dispatch *order* + checked counters (cycle tolerance 3), so the
+  reference survives RTL pipeline changes. The golden model mirrors RTL
+  register stages (push visibility +2, post-pop head +1, engine occupancy
+  LATENCY+1), so in practice all 12 runs also matched cycle-for-cycle
+  (diff 0).
 * SVA A1–A5 bound to `scheduler_top`: grant is one-hot (A1), a granted head
   is valid (A2), no grant while the engine is busy (A3), no grant of an
   expired head (A4), expire and grant never hit the same head in one cycle
@@ -163,7 +157,6 @@ in `sw/` and are not committed.
 - [x] 12-configuration golden-vs-RTL match (this repo)
 - [x] Multi-seed regression: 6 seeds x 3 loads x 4 policies (72 runs) + corner cases, all matching; xsim runs additionally monitored by SVA A1-A5
 - [x] Synthesis & timing closure (40 MHz; see Synthesis results)
-- [ ] N_STREAM 2/4/8 scaling table
 - [ ] Correlated-workload experiment where Hybrid's weights matter
 
 ## License
