@@ -35,15 +35,9 @@ HYB `W_D:W_U` = 3:1.
 | overload | UNC | 195 | 105 | **27** | **17** |
 | overload | HYB | 195 | 105 | 32 | 16 |
 
-The `FR recovered` metric is calculated offline from labels in the trace CSV.
-These labels are not visible to the RTL.
+Policy choice has little effect under normal load. Under overload, the uncertainty-aware policies produce fewer deadline misses and recover more false rejects than EDF.
 
-All 12 configurations match the Python golden model. See
-[Verification methodology](#verification-methodology) for details.
-
-Policy choice has little effect under normal load. Under overload, the
-uncertainty-aware policies produce fewer deadline misses and recover more
-false rejects than EDF.
+<sub>FR recovered is calculated offline from labels in the trace CSV; the labels are not visible to the RTL.</sub>
 
 ## Analysis
 
