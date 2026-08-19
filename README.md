@@ -64,8 +64,6 @@ The gate is a standard admission-control mechanism, so it is reported as an
 analysis result rather than a design contribution. The main policy comparison
 excludes the gate to preserve a meaningful scheduling problem.
 
-The experiment can be reproduced with `golden.py --gate`.
-
 ### Hybrid weight sweep
 
 A weight sweep from W_D:W_U = 8:1 to 1:8 was performed using
