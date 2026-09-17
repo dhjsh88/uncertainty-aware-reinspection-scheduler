@@ -4,7 +4,6 @@ This repository documents my implementation of a synthesizable Verilog scheduler
 
 ## Project Contributions
 
-
 | Contribution | Location |
 |---|---|
 | Four-policy priority logic and tournament arbitration with rotating tie-breaking | `rtl/policy_core.v`, `rtl/dispatch_arbiter.v` |
@@ -89,6 +88,42 @@ I also checked the following cases:
 - serialized handling of four requests with the same arrival timestamp
 - an expired entry hidden behind a valid FIFO head
 
+## Synthesis and Timing
+
+The trace-driven evaluation top was synthesized in Vivado 2022.2 for the `xc7z010clg400-1`. The run used `scheduler_top` with `FIFO_DEPTH = 64`, `LATENCY = 200`, and `TDEPTH = 16384`. The trace memory was initialized with 300 requests.
+
+### Post-Synthesis Utilization
+
+| Resource | Used | Available | Utilization |
+|---|---:|---:|---:|
+| Slice LUTs | 2,668 | 17,600 | 15.16% |
+| LUT as logic | 2,436 | 17,600 | 13.84% |
+| LUT as distributed RAM | 232 | 6,000 | 3.87% |
+| Flip-flops | 846 | 35,200 | 2.40% |
+| BRAM tiles | 0 | 60 | 0% |
+| DSP blocks | 0 | 80 | 0% |
+
+The four request FIFOs account for all 232 distributed-memory LUTs. The trace player, engine model, cycle counter, and performance counters are also included in these results. The figures therefore describe the complete trace-driven evaluation top rather than the reusable scheduling logic alone.
+
+`scheduler_top` exposes 471 signal bits as top-level I/O because its control and performance-counter signals are connected directly to module ports. This exceeds the device’s 100 available I/O pins. The module is an evaluation top, not a pin-level board top. A deployable wrapper would expose these signals through an internal bus or memory-mapped interface.
+
+### Performance-Counter Path
+
+An earlier version placed the 64-bit `sum_latency` accumulator on the scheduling-decision path. I registered the grant vector, deadline, arrival time, and current cycle. The counter comparison and accumulation then ran one cycle later.
+
+After this change, I reran the verification flow. The dispatch order and checked final counters remained unchanged.
+
+### Post-Synthesis Timing
+
+The XDC file applies a 25 ns clock constraint to `i_clk`. The current post-synthesis timing estimate reported a WNS of +0.694 ns and a TNS of 0 ns. None of the 3,303 setup endpoints failed the constraint, and the report contained no unconstrained paths.
+
+The worst setup path had a data-path delay of 23.924 ns and 41 logic levels. It started at a visible FIFO-head register and ended at another FIFO’s head-register enable:
+
+```text
+FIFO head → slack and policy logic → tournament → grant → FIFO update
+```
+
+
 ## Policy Measurements
 
 I compared the four policies on one deterministic trace for each load condition. Each trace contained 300 requests and used seed 7. The engine latency was 200 cycles. HYB used `W_D = 3` and `W_U = 1`.
@@ -134,41 +169,6 @@ docs/         architecture.png
 
 Trace files and simulation outputs are generated deterministically by the
 scripts in `sw/` and are not committed.
-
-## Synthesis and Timing
-
-The trace-driven evaluation top was synthesized in Vivado 2022.2 for the `xc7z010clg400-1`. The run used `scheduler_top` with `FIFO_DEPTH = 64`, `LATENCY = 200`, and `TDEPTH = 16384`. The trace memory was initialized with 300 requests.
-
-### Post-Synthesis Utilization
-
-| Resource | Used | Available | Utilization |
-|---|---:|---:|---:|
-| Slice LUTs | 2,668 | 17,600 | 15.16% |
-| LUT as logic | 2,436 | 17,600 | 13.84% |
-| LUT as distributed RAM | 232 | 6,000 | 3.87% |
-| Flip-flops | 846 | 35,200 | 2.40% |
-| BRAM tiles | 0 | 60 | 0% |
-| DSP blocks | 0 | 80 | 0% |
-
-The four request FIFOs account for all 232 distributed-memory LUTs. The trace player, engine model, cycle counter, and performance counters are also included in these results. The figures therefore describe the complete trace-driven evaluation top rather than the reusable scheduling logic alone.
-
-`scheduler_top` exposes 471 signal bits as top-level I/O because its control and performance-counter signals are connected directly to module ports. This exceeds the device’s 100 available I/O pins. The module is an evaluation top, not a pin-level board top. A deployable wrapper would expose these signals through an internal bus or memory-mapped interface.
-
-### Performance-Counter Path
-
-An earlier version placed the 64-bit `sum_latency` accumulator on the scheduling-decision path. I registered the grant vector, deadline, arrival time, and current cycle. The counter comparison and accumulation then ran one cycle later.
-
-After this change, I reran the verification flow. The dispatch order and checked final counters remained unchanged.
-
-### Post-Synthesis Timing
-
-The XDC file applies a 25 ns clock constraint to `i_clk`. The current post-synthesis timing estimate reported a WNS of +0.694 ns and a TNS of 0 ns. None of the 3,303 setup endpoints failed the constraint, and the report contained no unconstrained paths.
-
-The worst setup path had a data-path delay of 23.924 ns and 41 logic levels. It started at a visible FIFO-head register and ended at another FIFO’s head-register enable:
-
-```text
-FIFO head → slack and policy logic → tournament → grant → FIFO update
-```
 
 ## License
 
