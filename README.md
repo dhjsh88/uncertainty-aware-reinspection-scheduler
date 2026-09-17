@@ -222,8 +222,6 @@ I ran 12 baseline configurations in Vivado 2022.2 xsim. These runs covered three
 
 I also ran a six-seed regression with `sw/run_regress.sh`. It covered 6 seeds, 3 workloads, and 4 policies, for a total of 72 Icarus Verilog configurations. All 72 configurations matched the reference model in dispatch order and the counters checked by `sw/compare.py`. They also passed the end-of-run conservation check.
 
-The Icarus regression does not compile `tb/sva_bind.sv`. The concurrent assertions were exercised separately in the xsim runs. Generated simulation logs are not currently committed.
-
 ### Directed Cases
 
 I also checked the following cases:
