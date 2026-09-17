@@ -136,27 +136,40 @@ scripts in `sw/` and are not committed.
 
 Target: xc7z010clg400-1, Vivado 2022.2.
 
-### Utilization
+## Synthesis and Timing
 
-* 2,532 LUTs (14.4%)
-* 753 flip-flops (2.1%)
-* 0 BRAM, 0 DSP
+The trace-driven evaluation top was synthesized in Vivado 2022.2 for the `xc7z010clg400-1`. The run used `scheduler_top` with `FIFO_DEPTH = 64`, `LATENCY = 200`, and `TDEPTH = 16384`. The trace memory was initialized with 300 requests.
 
-The 8-bit Hybrid multipliers map to LUT logic, and the per-stream FIFOs are
-inferred as distributed RAM. These figures are from the synthesis performed
-before the performance-counter pipeline was added; the pipeline adds
-approximately 100 snapshot registers.
+### Post-Synthesis Utilization
 
-### Timing
+| Resource | Used | Available | Utilization |
+|---|---:|---:|---:|
+| Slice LUTs | 2,668 | 17,600 | 15.16% |
+| LUT as logic | 2,436 | 17,600 | 13.84% |
+| LUT as distributed RAM | 232 | 6,000 | 3.87% |
+| Flip-flops | 846 | 35,200 | 2.40% |
+| BRAM tiles | 0 | 60 | 0% |
+| DSP blocks | 0 | 80 | 0% |
 
-Timing closes at 40 MHz with a 25 ns clock period. Using the
-`Flow_PerfOptimized_high` synthesis strategy, WNS is +0.694 ns. The synthesis
-estimate implies an Fmax of approximately 41.1 MHz. With the default
-synthesis strategy, timing closes at 37 MHz with a 27 ns period and WNS of
-+1.137 ns.
+The four request FIFOs account for all 232 distributed-memory LUTs. The trace player, engine model, cycle counter, and performance counters are also included in these results. The figures therefore describe the complete trace-driven evaluation top rather than the reusable scheduling logic alone.
 
-The initial 100 MHz target was not met. Timing analysis identified two
-critical paths.
+`scheduler_top` exposes 471 signal bits as top-level I/O because its control and performance-counter signals are connected directly to module ports. This exceeds the device’s 100 available I/O pins. The module is an evaluation top, not a pin-level board top. A deployable wrapper would expose these signals through an internal bus or memory-mapped interface.
+
+### Performance-Counter Path
+
+An earlier version placed the 64-bit `sum_latency` accumulator on the scheduling-decision path. I registered the grant vector, deadline, arrival time, and current cycle. The counter comparison and accumulation then ran one cycle later.
+
+After this change, I reran the verification flow. The dispatch order and checked final counters remained unchanged.
+
+### Post-Synthesis Timing
+
+The XDC file applies a 25 ns clock constraint to `i_clk`. The current post-synthesis timing estimate reported a WNS of +0.694 ns and a TNS of 0 ns. None of the 3,303 setup endpoints failed the constraint, and the report contained no unconstrained paths.
+
+The worst setup path had a data-path delay of 23.924 ns and 41 logic levels. It started at a visible FIFO-head register and ended at another FIFO’s head-register enable:
+
+```text
+FIFO head → slack and policy logic → tournament → grant → FIFO update
+```
 
 **Performance-counter path.** The first critical path had WNS of -18.1 ns
 and 58 logic levels. It ended at the 64-bit `sum_latency` accumulator because
