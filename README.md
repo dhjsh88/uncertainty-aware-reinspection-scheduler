@@ -1,12 +1,46 @@
-# Deadline- and Uncertainty-Aware RTL Scheduler for Selective Reinspection
+# RTL Scheduler for a Shared Reinspection Engine
 
-An AI-based machine-vision inspection line may flag some parts as defective
-even when the initial classification is uncertain. Each borderline case
-becomes a **reinspection request** with a deadline and an uncertainty score.
-Requests wait in one of four per-stream FIFOs, all sharing a single
-reinspection engine. This synthesizable Verilog scheduler selects which
-request to dispatch next, with the goal of recovering as many false rejects
-as possible before their deadlines.
+This repository documents my implementation of a synthesizable Verilog scheduler for a modeled AI inspection system. Four request streams share one fixed-latency reinspection engine. Each request includes a deadline and an uncertainty score. The scheduler supports first-in, first-out (FIFO), earliest-deadline-first (EDF), uncertainty-based (UNC), and weighted hybrid (HYB) dispatch.
+
+Project Contributions
+---
+
+| Contribution | Location |
+|---|---|
+| Four-policy priority logic and tournament arbitration with rotating tie-breaking | `rtl/policy_core.v`, `rtl/dispatch_arbiter.v` |
+| Per-stream FWFT request queues and head-only expiration checks | `rtl/req_fifo.v`, `rtl/expire_unit.v` |
+| Scheduler integration, trace playback, and a fixed-latency engine model | `rtl/scheduler_top.v`, `rtl/trace_player.v`, `rtl/engine_model.v` |
+| Registered dispatch, deadline-miss, latency, and per-stream counters | `rtl/perf_counters.v`, `rtl/cycle_counter.v` |
+| SystemVerilog logging, an end-of-run conservation check, and bound assertions | `tb/tb_top.sv`, `tb/sva_bind.sv` |
+| Cycle-stepped Python reference model and automated RTL comparison | `sw/golden.py`, `sw/compare.py` |
+| Seeded workload generation and Icarus-based multi-seed regression | `sw/gen_trace.py`, `sw/run_regress.sh` |
+
+## Architecture and Policy Modes
+
+![Block diagram](docs/architecture.png)
+
+Each stream uses a first-word fall-through (FWFT) FIFO with a registered head slot. The four visible FIFO heads feed the expiration and policy logic. Requests behind those heads do not participate in arbitration.
+
+The internal request record is 80 bits: `{req_id[7:0], uncertainty[7:0], deadline[31:0], arrival[31:0]}`.
+
+For each visible head, the scheduler computes `slack = deadline - now`. A head expires after its deadline has passed and is removed from the queue. An expiring head is excluded from arbitration. When the engine is idle, the arbiter grants one of the remaining candidates.
+
+| Mode | Policy | Selection rule |
+|---|---|---|
+| `00` | FIFO | Oldest arrival time |
+| `01` | EDF | Smallest remaining slack |
+| `10` | UNC | Highest uncertainty |
+| `11` | HYB | Highest weighted urgency and uncertainty score |
+
+All four policies map their selection rule to a common larger-is-higher priority. A pairwise tournament tree selects the winning FIFO head. Equal priorities use a rotating tie-break, which advances past the previous winner.
+
+For HYB, the scheduler saturates the remaining slack to 16 bits and converts it to an 8-bit urgency value. It then computes a 17-bit score: `W_D × urgency8 + W_U × uncertainty`. `W_D` and `W_U` are 8-bit runtime inputs.
+
+### Trace-Driven Evaluation Top
+
+`scheduler_top.v` is a self-contained evaluation top. `trace_player.v` reads synthetic requests and routes each one to its stream FIFO. The trace entry is 88 bits because it includes an 8-bit stream field in addition to the 80-bit request record.
+
+The trace player injects at most one request per cycle. Requests with the same arrival timestamp are therefore serialized. `engine_model.v` provides a fixed-latency grant, busy, and done interface. It is a non-preemptive stub and does not implement the reinspection computation itself.
 
 ## Results
 
@@ -85,17 +119,6 @@ Hybrid should be reevaluated with a feasibility gate and workloads in which
 uncertainty and deadline pressure are correlated. This is left as future
 work.
 
-## Architecture
-
-![Block diagram](docs/architecture.png)
-
-* Record format: 80 bits, `{req_id[8], uncertainty[8], deadline[32], arrival[32]}`
-* Policy modes: `00` FIFO, `01` EDF, `10` UNC, `11` HYB
-* Hybrid score: `score = W_D*urgency8 + W_U*u`, weights programmable at runtime
-* Expiration is checked only at each FIFO head
-* The reinspection engine is non-preemptive
-* Each input stream uses an FWFT FIFO
-
 ## Repository layout
 
 ```
@@ -161,58 +184,56 @@ scheduler capable of making one decision per cycle at 40 MHz therefore
 supports a decision rate more than two orders of magnitude above the
 application's requirement.
 
-## Verification methodology
+## Verification
 
-### Golden-model comparison
+### Reference Model and Comparison
 
-All 12 configurations (3 workloads x 4 policies) pass against a
-cycle-stepped Python golden model in Vivado 2022.2 xsim. A multi-seed
-regression (6 seeds x 3 loads x 4 policies, 72 runs) also matches in every
-run. The following conservation invariant holds in every run:
-`pushed == dispatched + expired`.
+`sw/golden.py` is a cycle-stepped Python reference model. It follows the same four policy rules as the RTL. It also models the timing needed to compare the two implementations:
 
-### Pass criterion
+- a request pushed into an empty queue becomes visible after two cycles
+- the next head becomes visible one cycle after a pop
+- the minimum grant-to-grant interval is `LATENCY + 1` cycles
+- a visible head expires when `now > deadline`
+- a dispatched request misses its deadline when `now + LATENCY > deadline`
 
-PASS requires matching dispatch order and checked counter values. Dispatch
-timestamps are compared with a three-cycle tolerance; larger differences are
-reported as warnings and do not affect PASS. This keeps the reference model
-usable after limited RTL pipeline changes.
+`sw/compare.py` compares the RTL output with the reference model. A PASS requires the same number and ordered sequence of `(stream, req_id)` dispatches. It also requires exact agreement for the following counters:
 
-The golden model reproduces the relevant RTL register stages:
+- pushed, dispatched, expired, and deadline misses
+- completed requests and busy cycles
+- per-stream dispatch totals
 
-* push visibility: +2 cycles
-* post-pop head visibility: +1 cycle
-* minimum grant-to-grant interval: LATENCY+1 cycles (busy is asserted for
-  LATENCY cycles)
+`sum_latency` may differ by at most `tolerance × dispatched`. The default tolerance is three cycles. Dispatch-time differences are reported separately and do not determine PASS. A PASS therefore means that dispatch order and the checked counters agree. It does not require cycle-exact timestamps.
 
-Although a three-cycle tolerance is allowed, all 12 runs matched cycle for
-cycle with a difference of 0.
+### Assertions and End-of-Run Check
 
-### Metrics
+`tb/sva_bind.sv` binds five assertion categories to `scheduler_top`:
 
-All counters in the results table are RTL outputs except `FR recovered`,
-which is computed offline by the golden model from labels in the trace CSV.
-The labels are not visible to the RTL, so this counter is not part of the
-RTL-vs-golden comparison.
+- A1: a nonzero grant is one-hot
+- A2: a granted FIFO head is valid
+- A3: no grant occurs while the engine is busy
+- A4: an expired head is not granted
+- A5: grant and expiration do not target the same stream in one cycle
 
-### Assertions
+At the end of simulation, `tb/tb_top.sv` performs an additional conservation check. It requires `pushed == dispatched + expired`, zero residual FIFO occupancy, and an idle system.
 
-SVA assertions A1-A5 are bound to `scheduler_top`:
+### Simulation Runs
 
-* A1: any nonzero grant is one-hot
-* A2: a granted FIFO head is valid
-* A3: no grant occurs while the engine is busy
-* A4: an expired head is never granted
-* A5: expire and grant never target the same head in one cycle
+I ran 12 baseline configurations in Vivado 2022.2 xsim. These runs covered three synthetic workloads and four scheduling policies. The bound assertions and the RTL-to-reference comparison passed in all 12 configurations.
 
-The testbench checks A6, the conservation property, at the end of the
-simulation.
+I also ran a six-seed regression with `sw/run_regress.sh`. It covered 6 seeds, 3 workloads, and 4 policies, for a total of 72 Icarus Verilog configurations. All 72 configurations matched the reference model in dispatch order and the counters checked by `sw/compare.py`. They also passed the end-of-run conservation check.
 
-### Corner cases
+The Icarus regression does not compile `tb/sva_bind.sv`. The concurrent assertions were exercised separately in the xsim runs. Generated simulation logs are not currently committed.
 
-Corner cases tested: empty trace, all requests expired on arrival,
-simultaneous arrival on all four streams (tie-break observed as 0, 1, 2, 3),
-and expiration of entries hidden behind a valid head.
+### Directed Cases
+
+I also checked the following cases:
+
+- an empty trace
+- requests that were already expired when they reached a visible FIFO head
+- one request for each stream with the same arrival timestamp
+- an expired entry hidden behind a valid FIFO head
+
+The trace player accepts at most one request per cycle. Requests with the same arrival timestamp were therefore injected serially rather than simultaneously.
 
 ## License
 
