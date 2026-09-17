@@ -132,10 +132,6 @@ docs/         architecture.png
 Trace files and simulation outputs are generated deterministically by the
 scripts in `sw/` and are not committed.
 
-## Synthesis results
-
-Target: xc7z010clg400-1, Vivado 2022.2.
-
 ## Synthesis and Timing
 
 The trace-driven evaluation top was synthesized in Vivado 2022.2 for the `xc7z010clg400-1`. The run used `scheduler_top` with `FIFO_DEPTH = 64`, `LATENCY = 200`, and `TDEPTH = 16384`. The trace memory was initialized with 300 requests.
@@ -170,32 +166,6 @@ The worst setup path had a data-path delay of 23.924 ns and 41 logic levels. It 
 ```text
 FIFO head → slack and policy logic → tournament → grant → FIFO update
 ```
-
-**Performance-counter path.** The first critical path had WNS of -18.1 ns
-and 58 logic levels. It ended at the 64-bit `sum_latency` accumulator because
-the measurement logic was part of the combinational decision path.
-Registering the grant-time operands and delaying the accumulation by one
-cycle removed this bottleneck. This change did not affect any counter value
-or the dispatch log. All 12 configurations were reverified and still match
-the golden model exactly.
-
-**Scheduling-decision path.** The remaining path is 25.7 ns long and
-contains 43 logic levels:
-
-```
-FIFO head -> expire / policy / tournament -> grant -> pop pointer
-```
-
-Unlike the counter path, this one cannot be registered away: delaying the
-grant delays the FIFO pop, so the next decision would be made on stale
-state. Reaching 100 MHz would therefore require pipelining the grant
-decision itself, which changes the scheduling semantics and is left as
-future work.
-
-**Application context.** The engine occupies 200 cycles per request. A
-scheduler capable of making one decision per cycle at 40 MHz therefore
-supports a decision rate more than two orders of magnitude above the
-application's requirement.
 
 ## Verification
 
